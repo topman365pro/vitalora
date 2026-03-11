@@ -24,7 +24,11 @@ export const users = pgTable(
     id: uuid("id").defaultRandom().primaryKey(),
     email: text("email").notNull(),
     phone: text("phone"),
-    passwordHash: text("password_hash").notNull(),
+    passwordHash: text("password_hash"),
+    firebaseUid: text("firebase_uid"),
+    authProvider: text("auth_provider"),
+    avatarUrl: text("avatar_url"),
+    emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
     fullName: text("full_name").notNull(),
     dateOfBirth: date("date_of_birth"),
     gender: text("gender"),
@@ -35,6 +39,9 @@ export const users = pgTable(
   },
   (table) => [
     uniqueIndex("users_email_lower_uidx").using("btree", sql`LOWER(${table.email})`),
+    uniqueIndex("users_firebase_uid_uidx")
+      .on(table.firebaseUid)
+      .where(sql`${table.firebaseUid} IS NOT NULL`),
     check(
       "users_status_check",
       sql`${table.status} IN ('active', 'pending', 'suspended', 'disabled')`,

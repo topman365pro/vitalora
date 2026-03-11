@@ -3,6 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { signOutFromFirebase } from "@/lib/firebase/client";
+
 export function LogoutButton() {
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
@@ -11,6 +13,7 @@ export function LogoutButton() {
     setIsLoading(true);
 
     try {
+      await signOutFromFirebase();
       await fetch("/api/auth/logout", { method: "POST" });
       router.push("/login");
       router.refresh();

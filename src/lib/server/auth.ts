@@ -1,11 +1,61 @@
-import { desc, eq, sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
+import type { DecodedIdToken } from "firebase-admin/auth";
 
-import { createSession, deleteSession, requireSession } from "@/lib/auth/session";
-import { hashPassword, verifyPassword } from "@/lib/auth/password";
+import { clearSessionCookie, createSessionFromIdToken } from "@/lib/auth/session";
 import { getDb } from "@/lib/db";
-import { authSessions, userLoginEvents, users } from "@/lib/db/schema";
+import { userLoginEvents, users } from "@/lib/db/schema";
+import { getFirebaseAdminAuth } from "@/lib/firebase/admin";
 import { ApiError } from "@/lib/server/http";
-import type { LoginInput, RegisterInput } from "@/lib/server/validation";
+
+type AuthMeta = {
+  userAgent?: string | null;
+  ipAddress?: string | null;
+};
+
+type FirebaseUserProfile = {
+  uid: string;
+  email: string;
+  fullName: string;
+  avatarUrl: string | null;
+  authProvider: string;
+  emailVerified: boolean;
+};
+
+function normalizeEmail(email: string) {
+  return email.trim().toLowerCase();
+}
+
+export function resolveFirebaseUserAction(params: {
+  existingFirebaseUid: string | null;
+  existingEmailUserId: string | null;
+}) {
+  if (params.existingFirebaseUid) {
+    return "existing_firebase_uid" as const;
+  }
+
+  if (params.existingEmailUserId) {
+    return "link_by_email" as const;
+  }
+
+  return "create_new" as const;
+}
+
+function toFirebaseProfile(decoded: DecodedIdToken): FirebaseUserProfile {
+  const email = decoded.email ? normalizeEmail(decoded.email) : "";
+
+  if (!email) {
+    throw new ApiError("Firebase account is missing an email address", 400);
+  }
+
+  return {
+    uid: decoded.uid,
+    email,
+    fullName: decoded.name?.trim() || email.split("@")[0] || "Vitaloria user",
+    avatarUrl: decoded.picture ?? null,
+    authProvider: decoded.firebase.sign_in_provider || "firebase",
+    emailVerified: Boolean(decoded.email_verified),
+  };
+}
 
 async function logLoginEvent(params: {
   userId?: string | null;
@@ -26,89 +76,120 @@ async function logLoginEvent(params: {
   });
 }
 
-export async function registerUser(input: RegisterInput) {
+export async function syncUserFromFirebaseClaims(decoded: DecodedIdToken) {
   const db = getDb();
-  const passwordHash = await hashPassword(input.password);
+  const profile = toFirebaseProfile(decoded);
+  const [existingByUid] = await db
+    .select()
+    .from(users)
+    .where(eq(users.firebaseUid, profile.uid))
+    .limit(1);
+  const [existingByEmail] = await db
+    .select()
+    .from(users)
+    .where(sql`LOWER(${users.email}) = ${profile.email}`)
+    .limit(1);
+
+  const action = resolveFirebaseUserAction({
+    existingFirebaseUid: existingByUid?.id ?? null,
+    existingEmailUserId: existingByEmail?.id ?? null,
+  });
+
+  if (action === "existing_firebase_uid" && existingByUid) {
+    const [user] = await db
+      .update(users)
+      .set({
+        email: profile.email,
+        fullName: profile.fullName || existingByUid.fullName,
+        firebaseUid: profile.uid,
+        authProvider: profile.authProvider,
+        avatarUrl: profile.avatarUrl,
+        emailVerifiedAt:
+          profile.emailVerified && !existingByUid.emailVerifiedAt
+            ? new Date()
+            : existingByUid.emailVerifiedAt,
+        lastLoginAt: new Date(),
+      })
+      .where(eq(users.id, existingByUid.id))
+      .returning();
+
+    return user;
+  }
+
+  if (action === "link_by_email" && existingByEmail) {
+    const [user] = await db
+      .update(users)
+      .set({
+        email: profile.email,
+        fullName: existingByEmail.fullName || profile.fullName,
+        firebaseUid: profile.uid,
+        authProvider: profile.authProvider,
+        avatarUrl: profile.avatarUrl,
+        emailVerifiedAt:
+          profile.emailVerified && !existingByEmail.emailVerifiedAt
+            ? new Date()
+            : existingByEmail.emailVerifiedAt,
+        lastLoginAt: new Date(),
+      })
+      .where(eq(users.id, existingByEmail.id))
+      .returning();
+
+    return user;
+  }
 
   const [user] = await db
     .insert(users)
     .values({
-      email: input.email.trim().toLowerCase(),
-      fullName: input.fullName.trim(),
-      phone: input.phone?.trim() || null,
-      passwordHash,
+      email: profile.email,
+      fullName: profile.fullName,
+      passwordHash: null,
+      firebaseUid: profile.uid,
+      authProvider: profile.authProvider,
+      avatarUrl: profile.avatarUrl,
+      emailVerifiedAt: profile.emailVerified ? new Date() : null,
+      lastLoginAt: new Date(),
     })
-    .returning({
-      id: users.id,
-    });
+    .returning();
 
-  await createSession(user.id);
   return user;
 }
 
-export async function loginUser(
-  input: LoginInput,
-  meta: { userAgent?: string | null; ipAddress?: string | null },
-) {
-  const db = getDb();
-  const [user] = await db
-    .select()
-    .from(users)
-    .where(eq(sql`LOWER(${users.email})`, input.email.trim().toLowerCase()))
-    .limit(1);
-
-  if (!user) {
-    await logLoginEvent({
-      emailAttempted: input.email,
-      success: false,
-      failureReason: "user_not_found",
-      ...meta,
-    });
-    throw new ApiError("Invalid email or password", 401);
-  }
-
-  const isValid = await verifyPassword(user.passwordHash, input.password);
-
-  if (!isValid) {
+export async function exchangeFirebaseSession(idToken: string, meta: AuthMeta) {
+  try {
+    const decoded = await getFirebaseAdminAuth().verifyIdToken(idToken);
+    const user = await syncUserFromFirebaseClaims(decoded);
+    await createSessionFromIdToken(idToken);
     await logLoginEvent({
       userId: user.id,
-      emailAttempted: input.email,
-      success: false,
-      failureReason: "invalid_password",
+      emailAttempted: user.email,
+      success: true,
       ...meta,
     });
-    throw new ApiError("Invalid email or password", 401);
+
+    return {
+      id: user.id,
+      email: user.email,
+      fullName: user.fullName,
+    };
+  } catch (error) {
+    const message =
+      error instanceof Error && error.message ? error.message : "invalid_firebase_token";
+
+    await logLoginEvent({
+      emailAttempted: "firebase-session-exchange",
+      success: false,
+      failureReason: message,
+      ...meta,
+    });
+
+    if (error instanceof ApiError) {
+      throw error;
+    }
+
+    throw new ApiError("Unable to establish Firebase session", 401);
   }
-
-  await db
-    .update(users)
-    .set({ lastLoginAt: new Date() })
-    .where(eq(users.id, user.id));
-
-  await logLoginEvent({
-    userId: user.id,
-    emailAttempted: input.email,
-    success: true,
-    ...meta,
-  });
-
-  await createSession(user.id);
-  return user;
 }
 
 export async function logoutUser() {
-  await deleteSession();
-}
-
-export async function getAuthenticatedUser() {
-  return requireSession();
-}
-
-export async function listActiveSessions(userId: string) {
-  const db = getDb();
-  return db
-    .select()
-    .from(authSessions)
-    .where(eq(authSessions.userId, userId))
-    .orderBy(desc(authSessions.createdAt));
+  await clearSessionCookie();
 }

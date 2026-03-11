@@ -1,19 +1,20 @@
 import { headers } from "next/headers";
 import { NextResponse } from "next/server";
 
-import { loginUser } from "@/lib/server/auth";
+import { exchangeFirebaseSession } from "@/lib/server/auth";
 import { jsonError } from "@/lib/server/http";
-import { loginSchema } from "@/lib/server/validation";
+import { firebaseSessionSchema } from "@/lib/server/validation";
 
 export async function POST(request: Request) {
   try {
     const headerStore = await headers();
-    const input = loginSchema.parse(await request.json());
-    const user = await loginUser(input, {
+    const input = firebaseSessionSchema.parse(await request.json());
+    const user = await exchangeFirebaseSession(input.idToken, {
       userAgent: headerStore.get("user-agent"),
       ipAddress: headerStore.get("x-forwarded-for"),
     });
-    return NextResponse.json({ userId: user.id });
+
+    return NextResponse.json({ user });
   } catch (error) {
     return jsonError(error);
   }

@@ -1,34 +1,29 @@
-import { and, eq, gt } from "drizzle-orm";
-import { cookies, headers } from "next/headers";
+import { eq } from "drizzle-orm";
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { getSessionCookieName, getSessionTtlDays } from "@/lib/env";
 import { getDb } from "@/lib/db";
-import { authSessions, users } from "@/lib/db/schema";
+import { users } from "@/lib/db/schema";
+import { getFirebaseAdminAuth } from "@/lib/firebase/admin";
 
-function getExpiryDate() {
-  const ttlDays = getSessionTtlDays();
-  const expiresAt = new Date();
-  expiresAt.setDate(expiresAt.getDate() + ttlDays);
-  return expiresAt;
+export function getSessionDurationMs() {
+  return getSessionTtlDays() * 24 * 60 * 60 * 1000;
 }
 
-export async function createSession(userId: string) {
-  const db = getDb();
-  const headerStore = await headers();
+function getExpiryDate() {
+  return new Date(Date.now() + getSessionDurationMs());
+}
+
+export async function createSessionFromIdToken(idToken: string) {
   const cookieStore = await cookies();
-  const sessionId = crypto.randomUUID();
+  const adminAuth = getFirebaseAdminAuth();
+  const sessionCookie = await adminAuth.createSessionCookie(idToken, {
+    expiresIn: getSessionDurationMs(),
+  });
   const expiresAt = getExpiryDate();
 
-  await db.insert(authSessions).values({
-    id: sessionId,
-    userId,
-    expiresAt,
-    ipAddress: headerStore.get("x-forwarded-for") ?? undefined,
-    userAgent: headerStore.get("user-agent") ?? undefined,
-  });
-
-  cookieStore.set(getSessionCookieName(), sessionId, {
+  cookieStore.set(getSessionCookieName(), sessionCookie, {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
@@ -36,17 +31,11 @@ export async function createSession(userId: string) {
     path: "/",
   });
 
-  return sessionId;
+  return expiresAt;
 }
 
-export async function deleteSession() {
+export async function clearSessionCookie() {
   const cookieStore = await cookies();
-  const sessionId = cookieStore.get(getSessionCookieName())?.value;
-
-  if (sessionId) {
-    const db = getDb();
-    await db.delete(authSessions).where(eq(authSessions.id, sessionId));
-  }
 
   cookieStore.set(getSessionCookieName(), "", {
     httpOnly: true,
@@ -59,37 +48,37 @@ export async function deleteSession() {
 
 export async function getCurrentSession() {
   const cookieStore = await cookies();
-  const sessionId = cookieStore.get(getSessionCookieName())?.value;
+  const sessionCookie = cookieStore.get(getSessionCookieName())?.value;
 
-  if (!sessionId) {
+  if (!sessionCookie) {
     return null;
   }
 
-  const db = getDb();
-  const [session] = await db
-    .select({
-      sessionId: authSessions.id,
-      userId: users.id,
-      email: users.email,
-      fullName: users.fullName,
-      expiresAt: authSessions.expiresAt,
-    })
-    .from(authSessions)
-    .innerJoin(users, eq(authSessions.userId, users.id))
-    .where(and(eq(authSessions.id, sessionId), gt(authSessions.expiresAt, new Date())))
-    .limit(1);
+  try {
+    const decoded = await getFirebaseAdminAuth().verifySessionCookie(sessionCookie, true);
 
-  if (!session) {
-    await deleteSession();
+    const db = getDb();
+    const [user] = await db
+      .select({
+        userId: users.id,
+        email: users.email,
+        fullName: users.fullName,
+        firebaseUid: users.firebaseUid,
+      })
+      .from(users)
+      .where(eq(users.firebaseUid, decoded.uid))
+      .limit(1);
+
+    if (!user) {
+      await clearSessionCookie();
+      return null;
+    }
+
+    return user;
+  } catch {
+    await clearSessionCookie();
     return null;
   }
-
-  await db
-    .update(authSessions)
-    .set({ lastSeenAt: new Date() })
-    .where(eq(authSessions.id, session.sessionId));
-
-  return session;
 }
 
 export async function requireSession() {

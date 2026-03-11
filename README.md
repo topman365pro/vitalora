@@ -1,36 +1,77 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Vitaloria
 
-## Getting Started
+Vitaloria is a Next.js PWA for BLE health devices. It supports:
 
-First, run the development server:
+- Email/password auth backed by PostgreSQL
+- Device pairing and BLE capture session tracking
+- Live mock smartwatch streaming with a pluggable custom BLE adapter
+- Historical sensor charts from stored readings
+- Persistent AI chat threads about recent wearable trends
+- Offline shell and cached history/chat reads through a service worker
+
+## Stack
+
+- Next.js App Router + TypeScript
+- Tailwind CSS
+- Drizzle ORM + PostgreSQL
+- Recharts
+- Vitest
+
+## Environment
+
+Copy `.env.example` to `.env.local` and fill in:
+
+```bash
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/vitaloria
+SESSION_COOKIE_NAME=vitaloria_session
+SESSION_TTL_DAYS=14
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-4.1-mini
+NEXT_PUBLIC_DEFAULT_ADAPTER=mock
+```
+
+`OPENAI_API_KEY` is optional. If it is omitted, the app uses the mock wellness coach provider.
+
+## Database setup
+
+1. Create a PostgreSQL database.
+2. Apply the baseline schema in [`schema.sql`](/Users/arham/Downloads/vitaloria/schema.sql).
+3. Apply the additive app migration in [`drizzle/0001_app_extensions.sql`](/Users/arham/Downloads/vitaloria/drizzle/0001_app_extensions.sql).
+
+Example:
+
+```bash
+psql "$DATABASE_URL" -f schema.sql
+psql "$DATABASE_URL" -f drizzle/0001_app_extensions.sql
+```
+
+## Run
+
+```bash
+npm install
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000).
+
+## Scripts
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm run lint
+npm run typecheck
+npm run test:run
+npm run build
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## BLE integration notes
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- The default adapter is the mock adapter so the product is usable immediately.
+- The custom adapter scaffold lives in [`src/lib/ble/custom-text-spec-adapter.ts`](/Users/arham/Downloads/vitaloria/src/lib/ble/custom-text-spec-adapter.ts).
+- When you provide the plaintext BLE spec later, wire the service UUIDs, characteristic UUIDs, and payload parsing into that adapter.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## AI chat notes
 
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- The provider abstraction lives under [`src/lib/ai`](/Users/arham/Downloads/vitaloria/src/lib/ai).
+- Without an API key, the chat uses deterministic mock replies built from recent sensor summaries.
+- With an API key, the app calls the OpenAI Responses API.

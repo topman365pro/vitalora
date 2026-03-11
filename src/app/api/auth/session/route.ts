@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 
 import { exchangeFirebaseSession } from "@/lib/server/auth";
 import { jsonError } from "@/lib/server/http";
+import { sanitizeForwardedIp } from "@/lib/server/request";
 import { firebaseSessionSchema } from "@/lib/server/validation";
 
 export async function POST(request: Request) {
@@ -11,7 +12,7 @@ export async function POST(request: Request) {
     const input = firebaseSessionSchema.parse(await request.json());
     const user = await exchangeFirebaseSession(input.idToken, {
       userAgent: headerStore.get("user-agent"),
-      ipAddress: headerStore.get("x-forwarded-for"),
+      ipAddress: sanitizeForwardedIp(headerStore.get("x-forwarded-for")),
     });
 
     return NextResponse.json({ user });

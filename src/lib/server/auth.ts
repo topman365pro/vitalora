@@ -6,6 +6,7 @@ import { getDb } from "@/lib/db";
 import { userLoginEvents, users } from "@/lib/db/schema";
 import { getFirebaseAdminAuth } from "@/lib/firebase/admin";
 import { ApiError } from "@/lib/server/http";
+import { sanitizeForwardedIp } from "@/lib/server/request";
 
 type AuthMeta = {
   userAgent?: string | null;
@@ -72,8 +73,20 @@ async function logLoginEvent(params: {
     success: params.success,
     failureReason: params.success ? null : params.failureReason ?? "unknown",
     userAgent: params.userAgent ?? undefined,
-    ipAddress: params.ipAddress ?? undefined,
+    ipAddress: sanitizeForwardedIp(params.ipAddress) ?? undefined,
   });
+}
+
+function isFirebaseAuthFailure(error: unknown) {
+  const code =
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof error.code === "string"
+      ? error.code
+      : "";
+
+  return code.startsWith("auth/");
 }
 
 export async function syncUserFromFirebaseClaims(decoded: DecodedIdToken) {
@@ -175,18 +188,33 @@ export async function exchangeFirebaseSession(idToken: string, meta: AuthMeta) {
     const message =
       error instanceof Error && error.message ? error.message : "invalid_firebase_token";
 
-    await logLoginEvent({
-      emailAttempted: "firebase-session-exchange",
-      success: false,
-      failureReason: message,
-      ...meta,
+    console.error("firebase-session-exchange failed", {
+      message,
+      error,
+      hasUserAgent: Boolean(meta.userAgent),
+      hasIpAddress: Boolean(meta.ipAddress),
     });
+
+    try {
+      await logLoginEvent({
+        emailAttempted: "firebase-session-exchange",
+        success: false,
+        failureReason: message,
+        ...meta,
+      });
+    } catch (logError) {
+      console.error("firebase-session-exchange log write failed", logError);
+    }
 
     if (error instanceof ApiError) {
       throw error;
     }
 
-    throw new ApiError("Unable to establish Firebase session", 401);
+    if (isFirebaseAuthFailure(error)) {
+      throw new ApiError("Unable to establish Firebase session", 401);
+    }
+
+    throw new ApiError("Unexpected server error", 500);
   }
 }
 

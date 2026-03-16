@@ -24,7 +24,7 @@ export default async function AppLayout({
           <div className="flex items-center gap-4">
             <PwaInstallButton />
             <div className="text-right text-sm text-slate-300">
-              <p>{session.fullName}</p>
+              <p>{session.displayName ?? "Vitaloria user"}</p>
               <p>{session.email}</p>
             </div>
             <LogoutButton />

@@ -1,5 +1,17 @@
 import { z } from "zod";
 
+const emailSchema = z.email().max(320).transform((value) => value.trim().toLowerCase());
+const passwordSchema = z.string().min(8).max(256);
+
+export const loginSchema = z.object({
+  email: emailSchema,
+  password: passwordSchema,
+});
+
+export const registerSchema = loginSchema.extend({
+  fullName: z.string().trim().min(2).max(120),
+});
+
 export const firebaseSessionSchema = z.object({
   idToken: z.string().min(1),
 });
@@ -71,3 +83,4 @@ export const rangeSchema = z.enum(["24h", "7d", "30d"]).default("24h");
 
 export type PairDeviceInput = z.infer<typeof pairDeviceSchema>;
 export type NormalizedReadingBatchInput = z.infer<typeof normalizedReadingBatchSchema>;
+export type ReadingBatchRequestInput = z.infer<typeof readingBatchRequestSchema>;

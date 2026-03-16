@@ -2,15 +2,16 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
-  exchangeFirebaseSession,
-  signInWithFirebaseEmail,
-  signInWithFirebaseGoogle,
-  signUpWithFirebaseEmail,
+  completeGoogleRedirect,
+  exchangeUserForServerSession,
+  getFirebaseAuthErrorMessage,
+  registerWithEmail,
+  signInWithEmail,
+  signInWithGoogle,
 } from "@/lib/firebase/client";
-import { mapFirebaseAuthError } from "@/lib/firebase/errors";
 
 type AuthFormProps = {
   mode: "login" | "register";
@@ -20,11 +21,38 @@ export function AuthForm({ mode }: AuthFormProps) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
+  const [isGooglePending, setIsGooglePending] = useState(false);
 
-  async function completeSignIn() {
-    router.push("/dashboard");
-    router.refresh();
-  }
+  useEffect(() => {
+    let cancelled = false;
+
+    async function handleRedirect() {
+      try {
+        const credential = await completeGoogleRedirect();
+
+        if (!credential || cancelled) {
+          return;
+        }
+
+        await exchangeUserForServerSession(credential.user);
+
+        if (!cancelled) {
+          router.push("/dashboard");
+          router.refresh();
+        }
+      } catch (redirectError) {
+        if (!cancelled) {
+          setError(getFirebaseAuthErrorMessage(redirectError));
+        }
+      }
+    }
+
+    void handleRedirect();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
   async function handleSubmit(formData: FormData) {
     setIsPending(true);
@@ -34,32 +62,39 @@ export function AuthForm({ mode }: AuthFormProps) {
       const fullName = String(formData.get("fullName") ?? "");
       const email = String(formData.get("email") ?? "");
       const password = String(formData.get("password") ?? "");
-      const user =
-        mode === "register"
-          ? await signUpWithFirebaseEmail(fullName, email, password)
-          : await signInWithFirebaseEmail(email, password);
+      const credential =
+        mode === "login"
+          ? await signInWithEmail(email, password)
+          : await registerWithEmail(fullName, email, password);
 
-      await exchangeFirebaseSession(user);
-      await completeSignIn();
+      await exchangeUserForServerSession(credential.user);
+      router.push("/dashboard");
+      router.refresh();
     } catch (submitError) {
-      setError(mapFirebaseAuthError(submitError));
+      setError(getFirebaseAuthErrorMessage(submitError));
     } finally {
       setIsPending(false);
     }
   }
 
   async function handleGoogleSignIn() {
-    setIsPending(true);
+    setIsGooglePending(true);
     setError(null);
 
     try {
-      const user = await signInWithFirebaseGoogle();
-      await exchangeFirebaseSession(user);
-      await completeSignIn();
-    } catch (signInError) {
-      setError(mapFirebaseAuthError(signInError));
+      const credential = await signInWithGoogle();
+
+      if (!credential) {
+        return;
+      }
+
+      await exchangeUserForServerSession(credential.user);
+      router.push("/dashboard");
+      router.refresh();
+    } catch (googleError) {
+      setError(getFirebaseAuthErrorMessage(googleError));
     } finally {
-      setIsPending(false);
+      setIsGooglePending(false);
     }
   }
 
@@ -73,32 +108,32 @@ export function AuthForm({ mode }: AuthFormProps) {
             : "Create your wearable wellness workspace"}
         </h1>
         <p className="text-sm leading-6 text-slate-300">
-          Sign in with Google or Firebase email/password, then sync that identity to
-          your Vitaloria data.
+          Sign in with Google or a Firebase email/password account to access live device
+          data, historical readings, and AI chat.
         </p>
       </div>
 
-      <button
-        type="button"
-        onClick={handleGoogleSignIn}
-        disabled={isPending}
-        className="mb-4 flex w-full items-center justify-center gap-3 rounded-full border border-white/14 bg-white px-5 py-3 font-semibold text-slate-950 transition hover:bg-slate-100 disabled:opacity-60"
-      >
-        <span className="text-base">G</span>
-        {isPending ? "Working..." : "Continue with Google"}
-      </button>
-
-      <div className="mb-4 flex items-center gap-3 text-xs uppercase tracking-[0.22em] text-slate-400">
-        <span className="h-px flex-1 bg-white/10" />
-        Or use email
-        <span className="h-px flex-1 bg-white/10" />
+      <div className="space-y-3">
+        <button
+          type="button"
+          onClick={handleGoogleSignIn}
+          disabled={isPending || isGooglePending}
+          className="flex w-full items-center justify-center rounded-full border border-white/16 bg-white/6 px-5 py-3 font-semibold text-white transition hover:bg-white/10 disabled:opacity-60"
+        >
+          {isGooglePending ? "Connecting to Google..." : "Continue with Google"}
+        </button>
+        <div className="flex items-center gap-3 text-xs uppercase tracking-[0.24em] text-slate-500">
+          <div className="h-px flex-1 bg-white/10" />
+          <span>Email</span>
+          <div className="h-px flex-1 bg-white/10" />
+        </div>
       </div>
 
       <form
         action={async (formData) => {
           await handleSubmit(formData);
         }}
-        className="space-y-4"
+        className="mt-4 space-y-4"
       >
         {mode === "register" ? (
           <label className="block space-y-2">
@@ -131,7 +166,7 @@ export function AuthForm({ mode }: AuthFormProps) {
             minLength={8}
             required
             className="w-full rounded-2xl border border-white/10 bg-white/6 px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-cyan-300/50"
-            placeholder={mode === "login" ? "Your Firebase password" : "Create a Firebase password"}
+            placeholder={mode === "login" ? "Your password" : "Create a password"}
           />
         </label>
 
@@ -143,7 +178,7 @@ export function AuthForm({ mode }: AuthFormProps) {
 
         <button
           type="submit"
-          disabled={isPending}
+          disabled={isPending || isGooglePending}
           className="w-full rounded-full bg-cyan-300 px-5 py-3 font-semibold text-slate-950 transition hover:bg-cyan-200 disabled:opacity-60"
         >
           {isPending
@@ -152,14 +187,9 @@ export function AuthForm({ mode }: AuthFormProps) {
               : "Creating account..."
             : mode === "login"
               ? "Sign in with email"
-              : "Create Firebase account"}
+              : "Create email account"}
         </button>
       </form>
-
-      <div className="mt-4 rounded-2xl border border-cyan-400/20 bg-cyan-500/8 px-4 py-3 text-sm text-cyan-100">
-        Existing Vitaloria users should sign in with the same email they already used so
-        your stored device, reading, and chat history links automatically.
-      </div>
 
       <p className="mt-6 text-sm text-slate-300">
         {mode === "login" ? "Need an account?" : "Already registered?"}{" "}

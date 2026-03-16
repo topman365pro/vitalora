@@ -8,8 +8,8 @@ export const dynamic = "force-dynamic";
 export default async function DashboardPage() {
   const session = await requireSession();
   const [summary, chat] = await Promise.all([
-    getReadingSummary(session.userId, "24h"),
-    getThreadsWithMessages(session.userId),
+    getReadingSummary(session.uid, "24h"),
+    getThreadsWithMessages(session.uid),
   ]);
 
   return (

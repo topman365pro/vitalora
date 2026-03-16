@@ -10,7 +10,7 @@ export async function GET(request: Request) {
     const session = await requireSession();
     const { searchParams } = new URL(request.url);
     const range = rangeSchema.parse(searchParams.get("range") ?? "24h");
-    const history = await getReadingHistory(session.userId, range);
+    const history = await getReadingHistory(session.uid, range);
     return NextResponse.json({ history });
   } catch (error) {
     return jsonError(error);

@@ -1,21 +1,28 @@
-import { headers } from "next/headers";
 import { NextResponse } from "next/server";
 
-import { exchangeFirebaseSession } from "@/lib/server/auth";
+import { createSessionFromIdToken } from "@/lib/auth/session";
+import { getFirebaseAdminAuth } from "@/lib/firebase/admin";
+import { upsertUserProfile } from "@/lib/server/firebase-store";
 import { jsonError } from "@/lib/server/http";
-import { sanitizeForwardedIp } from "@/lib/server/request";
 import { firebaseSessionSchema } from "@/lib/server/validation";
 
 export async function POST(request: Request) {
   try {
-    const headerStore = await headers();
     const input = firebaseSessionSchema.parse(await request.json());
-    const user = await exchangeFirebaseSession(input.idToken, {
-      userAgent: headerStore.get("user-agent"),
-      ipAddress: sanitizeForwardedIp(headerStore.get("x-forwarded-for")),
-    });
+    const auth = getFirebaseAdminAuth();
+    const decodedToken = await auth.verifyIdToken(input.idToken);
+    const user = await upsertUserProfile(decodedToken);
 
-    return NextResponse.json({ user });
+    await createSessionFromIdToken(input.idToken);
+
+    return NextResponse.json({
+      user: {
+        uid: user.uid,
+        email: user.email,
+        displayName: user.displayName,
+        photoURL: user.photoURL,
+      },
+    });
   } catch (error) {
     return jsonError(error);
   }

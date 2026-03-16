@@ -1,8 +1,6 @@
-import { and, asc, desc, eq } from "drizzle-orm";
-
 import type { ChatContextPayload } from "@/lib/ai";
-import { getDb } from "@/lib/db";
-import { chatMessages, chatThreads, devices } from "@/lib/db/schema";
+import { getDevice } from "@/lib/server/firebase-store";
+import { getThread, listMessages, listThreads } from "@/lib/server/chat-store";
 import { getReadingHistory, summarizeReadings } from "@/lib/server/readings";
 
 export function createTrendSummary(
@@ -25,35 +23,21 @@ export function createTrendSummary(
 }
 
 export async function buildChatContext(
-  userId: string,
+  uid: string,
   threadId: string,
   userQuestion: string,
 ): Promise<ChatContextPayload> {
-  const db = getDb();
-  const [thread] = await db
-    .select()
-    .from(chatThreads)
-    .where(and(eq(chatThreads.id, threadId), eq(chatThreads.userId, userId)))
-    .limit(1);
+  const thread = await getThread(uid, threadId);
 
-  const history = await getReadingHistory(userId, "24h");
+  const history = await getReadingHistory(uid, "24h");
   const [device, messages] = await Promise.all([
-    thread?.deviceId
-      ? db
-          .select()
-          .from(devices)
-          .where(and(eq(devices.id, thread.deviceId), eq(devices.userId, userId)))
-          .limit(1)
-      : Promise.resolve([]),
-    db
-      .select({
-        role: chatMessages.role,
-        content: chatMessages.content,
-      })
-      .from(chatMessages)
-      .where(eq(chatMessages.threadId, threadId))
-      .orderBy(asc(chatMessages.createdAt))
-      .limit(10),
+    thread?.deviceId ? getDevice(uid, thread.deviceId) : Promise.resolve(null),
+    listMessages(uid, threadId).then((items) =>
+      items.slice(0, 10).map((message) => ({
+        role: message.role,
+        content: message.content,
+      })),
+    ),
   ]);
 
   const latest = history.at(-1) ?? null;
@@ -61,12 +45,12 @@ export async function buildChatContext(
   return {
     latestReading: latest,
     trendSummary: createTrendSummary(history),
-    activeDevice: device[0]
+    activeDevice: device
       ? {
-          id: device[0].id,
-          name: device[0].deviceName,
-          model: device[0].model,
-          lastSyncedAt: device[0].lastSyncedAt?.toISOString() ?? null,
+          id: device.id,
+          name: device.deviceName,
+          model: device.model,
+          lastSyncedAt: device.lastSyncedAt?.toISOString() ?? null,
         }
       : null,
     recentMessages: messages,
@@ -74,23 +58,14 @@ export async function buildChatContext(
   };
 }
 
-export async function getThreadsWithMessages(userId: string) {
-  const db = getDb();
-  const threads = await db
-    .select()
-    .from(chatThreads)
-    .where(eq(chatThreads.userId, userId))
-    .orderBy(desc(chatThreads.updatedAt));
+export async function getThreadsWithMessages(uid: string) {
+  const threads = await listThreads(uid);
 
   if (threads.length === 0) {
     return { threads: [], messages: [] };
   }
 
-  const messages = await db
-    .select()
-    .from(chatMessages)
-    .where(eq(chatMessages.threadId, threads[0].id))
-    .orderBy(asc(chatMessages.createdAt));
+  const messages = await listMessages(uid, threads[0].id);
 
   return { threads, messages };
 }

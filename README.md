@@ -2,10 +2,10 @@
 
 Vitaloria is a Next.js PWA for BLE health devices. It supports:
 
-- Firebase Authentication with Google login and Firebase email/password
+- Firebase Authentication with Google plus email/password
 - Device pairing and BLE capture session tracking
 - Live mock smartwatch streaming with a pluggable custom BLE adapter
-- Historical sensor charts from stored readings
+- Historical sensor charts from Firestore readings
 - Persistent AI chat threads about recent wearable trends
 - Offline shell and cached history/chat reads through a service worker
 
@@ -13,7 +13,8 @@ Vitaloria is a Next.js PWA for BLE health devices. It supports:
 
 - Next.js App Router + TypeScript
 - Tailwind CSS
-- Drizzle ORM + PostgreSQL
+- Firebase Authentication
+- Cloud Firestore
 - Recharts
 - Vitest
 
@@ -22,7 +23,6 @@ Vitaloria is a Next.js PWA for BLE health devices. It supports:
 Copy `.env.example` to `.env.local` and fill in:
 
 ```bash
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/vitaloria
 SESSION_COOKIE_NAME=vitaloria_session
 SESSION_TTL_DAYS=14
 NEXT_PUBLIC_FIREBASE_API_KEY=
@@ -34,29 +34,18 @@ NEXT_PUBLIC_FIREBASE_APP_ID=
 FIREBASE_PROJECT_ID=
 FIREBASE_CLIENT_EMAIL=
 FIREBASE_PRIVATE_KEY=
-OPENAI_API_KEY=
-OPENAI_MODEL=gpt-4.1-mini
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-3-flash-preview
 NEXT_PUBLIC_DEFAULT_ADAPTER=mock
 ```
 
-`OPENAI_API_KEY` is optional. If it is omitted, the app uses the mock wellness coach provider.
+`GEMINI_API_KEY` is optional. If it is omitted, the app uses the mock wellness coach provider.
+`FIREBASE_*` admin credentials are required for server-side Firebase session cookies and Firestore access.
 
-Firebase Admin credentials are required for the server-side session exchange route and SSR auth checks.
-
-## Database setup
-
-1. Create a PostgreSQL database.
-2. Apply the baseline schema in [`schema.sql`](/Users/arham/Downloads/vitaloria/schema.sql).
-3. Apply the additive app migration in [`drizzle/0001_app_extensions.sql`](/Users/arham/Downloads/vitaloria/drizzle/0001_app_extensions.sql).
-4. Apply the Firebase auth migration in [`drizzle/0002_firebase_auth.sql`](/Users/arham/Downloads/vitaloria/drizzle/0002_firebase_auth.sql).
-
-Example:
-
-```bash
-psql "$DATABASE_URL" -f schema.sql
-psql "$DATABASE_URL" -f drizzle/0001_app_extensions.sql
-psql "$DATABASE_URL" -f drizzle/0002_firebase_auth.sql
-```
+Firebase console setup:
+- Enable Google and Email/Password in Authentication.
+- Add `localhost` and `vitalora-ruby.vercel.app` to Authorized domains.
+- Keep Firestore enabled in project `vitalora-1ffd9`.
 
 ## Run
 
@@ -83,15 +72,9 @@ npm run build
 - The custom adapter scaffold lives in [`src/lib/ble/custom-text-spec-adapter.ts`](/Users/arham/Downloads/vitaloria/src/lib/ble/custom-text-spec-adapter.ts).
 - When you provide the plaintext BLE spec later, wire the service UUIDs, characteristic UUIDs, and payload parsing into that adapter.
 
-## Firebase auth notes
-
-- Enable Google and Email/Password providers in Firebase Auth.
-- Add `vitalora-ruby.vercel.app` to Firebase authorized domains.
-- The browser uses the Firebase Web SDK; the server verifies ID tokens and mints session cookies with Firebase Admin.
-- Existing users are linked to their PostgreSQL data by normalized email on first Firebase sign-in.
-
 ## AI chat notes
 
 - The provider abstraction lives under [`src/lib/ai`](/Users/arham/Downloads/vitaloria/src/lib/ai).
+- User profiles, devices, readings, capture sessions, and chat threads are stored in Firestore under each user document.
 - Without an API key, the chat uses deterministic mock replies built from recent sensor summaries.
-- With an API key, the app calls the OpenAI Responses API.
+- With an API key, the app calls the Google Gemini `generateContent` API using `gemini-3-flash-preview`.
